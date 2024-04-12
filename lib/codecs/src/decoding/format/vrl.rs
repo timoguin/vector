@@ -6,10 +6,12 @@ use smallvec::{smallvec, SmallVec};
 use vector_config_macros::configurable_component;
 use vector_core::config::{DataType, LogNamespace};
 use vector_core::event::{Event, TargetEvents, VrlTarget};
+use vector_core::schema::meaning;
 use vector_core::{compile_vrl, schema};
 use vrl::compiler::state::ExternalEnv;
 use vrl::compiler::{runtime::Runtime, CompileConfig, Program, TimeZone, TypeState};
 use vrl::diagnostic::Formatter;
+use vrl::path::OwnedTargetPath;
 use vrl::value::Kind;
 
 /// Config used to build a `VrlDeserializer`.
@@ -82,6 +84,7 @@ impl VrlDeserializerConfig {
             }
             LogNamespace::Vector => {
                 schema::Definition::new_with_default_metadata(Kind::any(), [log_namespace])
+                    .with_meaning(OwnedTargetPath::event_root(), meaning::MESSAGE)
             }
         }
     }
