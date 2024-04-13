@@ -2103,6 +2103,7 @@ dependencies = [
  "vector-config-macros",
  "vector-core",
  "vector-lookup",
+ "vector-vrl-functions",
  "vrl",
 ]
 

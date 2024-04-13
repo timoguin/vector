@@ -2,11 +2,14 @@ use crate::decoding::format::Deserializer;
 use crate::BytesDeserializerConfig;
 use bytes::Bytes;
 use derivative::Derivative;
+use lookup::lookup_v2::ConfigTargetPath;
 use smallvec::{smallvec, SmallVec};
+use std::collections::BTreeMap;
 use vector_config_macros::configurable_component;
 use vector_core::config::{DataType, LogNamespace};
 use vector_core::event::{Event, TargetEvents, VrlTarget};
 use vector_core::{compile_vrl, schema};
+use vector_vrl_functions::set_semantic_meaning::MeaningList;
 use vrl::compiler::state::ExternalEnv;
 use vrl::compiler::{runtime::Runtime, CompileConfig, Program, TimeZone, TypeState};
 use vrl::diagnostic::Formatter;
@@ -18,6 +21,10 @@ use vrl::value::Kind;
 pub struct VrlDeserializerConfig {
     /// VRL-specific decoding options.
     pub vrl: VrlDeserializerOptions,
+
+    /// Used for storing the meanings list after compilation.
+    // This is a workaround because the `OwnedTargetPath` type doesn't implement Configurable.
+    meaning_list: BTreeMap<String, ConfigTargetPath>,
 }
 
 /// VRL-specific decoding options.
@@ -47,22 +54,33 @@ pub struct VrlDeserializerOptions {
 
 impl VrlDeserializerConfig {
     /// Build the `VrlDeserializer` from this configuration.
-    pub fn build(&self) -> vector_common::Result<VrlDeserializer> {
+    pub fn build(&mut self) -> vector_common::Result<VrlDeserializer> {
         let state = TypeState {
             local: Default::default(),
             external: ExternalEnv::default(),
         };
 
-        match compile_vrl(
-            &self.vrl.source,
-            &vrl::stdlib::all(),
-            &state,
-            CompileConfig::default(),
-        ) {
-            Ok(result) => Ok(VrlDeserializer {
-                program: result.program,
-                timezone: self.vrl.timezone.unwrap_or(TimeZone::Local),
-            }),
+        let mut functions = vrl::stdlib::all();
+        functions.append(&mut vector_vrl_functions::all());
+
+        let mut config = CompileConfig::default();
+        config.set_custom(MeaningList::default());
+        match compile_vrl(&self.vrl.source, &functions, &state, config) {
+            Ok(result) => {
+                self.meaning_list = result
+                    .config
+                    .get_custom::<MeaningList>()
+                    .cloned()
+                    .expect("context exists")
+                    .0
+                    .iter()
+                    .map(|(key, value)| (key.clone(), ConfigTargetPath(value.clone())))
+                    .collect();
+                Ok(VrlDeserializer {
+                    program: result.program,
+                    timezone: self.vrl.timezone.unwrap_or(TimeZone::Local),
+                })
+            }
             Err(diagnostics) => Err(Formatter::new(&self.vrl.source, diagnostics)
                 .to_string()
                 .into()),
@@ -76,6 +94,7 @@ impl VrlDeserializerConfig {
 
     /// The schema produced by the deserializer.
     pub fn schema_definition(&self, log_namespace: LogNamespace) -> schema::Definition {
+        println!("{:#?}", self.meaning_list);
         match log_namespace {
             LogNamespace::Legacy => {
                 schema::Definition::empty_legacy_namespace().unknown_fields(Kind::any())
@@ -143,14 +162,16 @@ mod tests {
     use vrl::value::Value;
 
     fn make_decoder(source: &str) -> VrlDeserializer {
-        VrlDeserializerConfig {
+        let mut config = VrlDeserializerConfig {
             vrl: VrlDeserializerOptions {
                 source: source.to_string(),
                 timezone: None,
             },
-        }
-        .build()
-        .expect("Failed to build VrlDeserializer")
+            meaning_list: BTreeMap::default(),
+        };
+        println!("{:?}", config.schema_definition(LogNamespace::Vector));
+
+        config.build().expect("Failed to build VrlDeserializer")
     }
 
     #[test]
@@ -186,6 +207,7 @@ mod tests {
     fn test_ignored_returned_expression() {
         let source = indoc!(
             r#"
+            set_semantic_meaning(., "message")
             . = { "a" : 1 }
             { "b" : 9 }
         "#
@@ -300,6 +322,7 @@ mod tests {
                 source: ". ?".to_string(),
                 timezone: None,
             },
+            meaning_list: BTreeMap::default(),
         }
         .build()
         .unwrap_err()

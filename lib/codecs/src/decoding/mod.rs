@@ -305,7 +305,7 @@ impl From<NativeJsonDeserializerConfig> for DeserializerConfig {
 
 impl DeserializerConfig {
     /// Build the `Deserializer` from this configuration.
-    pub fn build(&self) -> vector_common::Result<Deserializer> {
+    pub fn build(&mut self) -> vector_common::Result<Deserializer> {
         match self {
             DeserializerConfig::Avro { avro } => Ok(Deserializer::Avro(
                 AvroDeserializerConfig {
